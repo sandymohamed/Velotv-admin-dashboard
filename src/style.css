@@ -1,0 +1,29 @@
+.admin-shell .sidebar {background:#112139}
+.admin-shell .brand-icon {background:#075f62;box-shadow:none}
+.admin-shell .sidebar button.current {background:#173948;border-color:#30566a}
+.admin-shell .sidebar button.current svg {color:#82e0d0}
+:root {--purple:#075f62}
+.primary:hover:not(:disabled) {background:#084d53}
+.admin-metrics {margin-top:0}
+.admin-metrics .metric {border-top:3px solid #238582}
+.chart {min-height:165px;display:grid;grid-template-columns:repeat(12,1fr);align-items:end;gap:8px;padding:14px 20px 20px;border-top:1px solid var(--border)}
+.chart>div {display:grid;gap:5px;justify-items:center;color:#526078;font-size:.78rem}
+.chart-bar {width:min(36px,90%);background:linear-gradient(#2dafa3,#08756f);border-radius:5px 5px 0 0}
+.row-actions {display:flex;flex-wrap:wrap;min-width:225px}
+.row-actions button {font-size:.82rem;min-height:32px}
+.danger {color:#94213b}
+.state-archived,.state-expired {background:#fbe9ea;color:#942e41}
+.state-paused {background:#fff2d7;color:#805013}
+.modal::backdrop {background:#0e1b32a0}
+.modal {width:min(calc(100% - 24px),520px);max-height:calc(100dvh - 24px);overflow:auto}
+.detail-modal {width:min(calc(100% - 24px),780px)}
+.detail-modal h2 {margin:12px 0}
+.check {display:flex!important;align-items:center;gap:8px!important}
+@media(max-width:650px){
+  .admin-shell .sidebar {display:flex;position:static;height:auto;min-height:0;width:auto;padding:14px}
+  .admin-shell .sidebar .brand {margin:0 0 12px}
+  .admin-shell .sidebar nav {display:flex;overflow:auto}
+  .admin-shell .sidebar nav button {width:auto;white-space:nowrap}
+  .admin-shell .sidebar-foot {margin-top:8px;padding:2px}
+  .chart {gap:3px;padding-inline:8px}
+}
