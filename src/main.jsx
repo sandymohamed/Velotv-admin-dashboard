@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import AgentManager,{AdminInvitation} from './AgentManager';
+import PackageLifecycleActions from './PackageLifecycleActions';
+import OfferManager from './OfferManager';
+import PurchaseHistory from './PurchaseHistory';
+import { money } from './commerce';
+import './commerce.css';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, CreditCard, LayoutDashboard, LogOut, Monitor, Plus, RefreshCw, Ticket, Users } from 'lucide-react';
 import { request } from './api';
@@ -7,8 +13,9 @@ import './style.css';
 
 const base = '/api/admin/console/';
 const sections = [
-  ['overview','Overview',LayoutDashboard], ['resellers','Resellers',Users],
-  ['devices','Devices',Monitor], ['plans','Reseller plans',Activity], ['coupon-packages','Coupon packages',Ticket],
+  ['overview','Overview',LayoutDashboard], ['resellers','Resellers',Users], ['agents','Sales agents',Users],
+  ['devices','Devices',Monitor], ['plans','Reseller plans',Activity], ['coupon-packages','Activation packages',Ticket],
+  ['package-offers','Package offers',Ticket], ['package-purchases','Package purchases',CreditCard],
   ['payment-methods','Payment methods',CreditCard],
 ];
 const n = value => Number(value ?? 0).toLocaleString('en');
@@ -86,12 +93,13 @@ const entityConfig = {
       ['price','Price','number',0,99999999.99,.01],['currency','Currency code'],['enabled','Available for assignment','checkbox']],
   },
   'coupon-packages': {
-    label:'Coupon package',list:'packages',
-    fields:[['package_name','Name'],['package_amount','Price in credits','number',.001,99999.999,.001],
-      ['periods','Months per coupon','number',1,120,1],['count_devices','Coupons per package','number',1,1000,1]],
+    label:'Activation package',list:'packages',
+    fields:[['package_name','Name'],['package_amount','Base price (EUR)','number',.01,99999.99,.01],
+      ['periods','Months per device','number',1,120,1],['count_devices','Activations per package','number',1,1000,1],
+      ['enabled','Package enabled','checkbox'],['offer_only','Require an eligible offer','checkbox']],
   },
 };
-const methodNames = {credits:'Credit balance',paypal:'PayPal checkout',manual:'Manual paid credit top-ups'};
+const methodNames = {credits:'EUR wallet',paypal:'PayPal checkout',manual:'Manual paid credit top-ups'};
 function Modal({ title, close, busy = false, wide = false, children }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -161,7 +169,7 @@ function Editor({ seed, plans, save, close }) {
   return <Modal title={title} busy={busy} close={() => close()}>
     <form className="form dialog-form" onSubmit={submit}><fieldset disabled={busy}>
       {entity?.fields.map(([key,name,type,min,max,step]) => type === 'checkbox' ?
-        <label className="check" key={key}><input type="checkbox" name={key} defaultChecked={row ? Boolean(row[key]) : true}/>{name}</label> :
+        <label className="check" key={key}><input type="checkbox" name={key} defaultChecked={row ? Boolean(Number(row[key])) : key !== 'offer_only'}/>{name}</label> :
         <label key={key}>{name}<input name={key} type={type || 'text'} min={min} max={max} step={step}
           defaultValue={row?.[key] ?? (key === 'currency' ? 'EUR' : '')} required maxLength={key === 'currency' ? 3 : 120}/></label>)}
       {kind === 'profile' && <>
@@ -184,8 +192,8 @@ function Editor({ seed, plans, save, close }) {
       {kind === 'credit' && <>
         <label>Adjustment type<select name="kind" onChange={event => setPaid(event.target.value === 'manual_paid')}>
           <option value="gift">Gift</option><option value="manual_paid">Manual payment</option></select></label>
-        <label>Credits<input type="number" min=".00001" max="99999.99999" step=".00001" name="amount" required/></label>
-        <label>Unique reference<input name="paymentId" required maxLength={128}/></label>
+        <label>Wallet amount (EUR)<input type="number" min=".00001" max="99999.99999" step=".00001" name="amount" required/></label>
+        <label>Unique reference<input name="paymentId" required maxLength={128} pattern="[A-Za-z0-9][A-Za-z0-9._:\/\-]*" defaultValue={globalThis.crypto.randomUUID()}/></label>
         {paid && <div className="form-row"><label>Paid amount<input name="paidAmount" type="number" min=".01" step=".01" required/></label>
           <label>Currency<input name="currency" defaultValue="EUR" pattern="[A-Za-z]{3}" required/></label></div>}
       </>}
@@ -201,26 +209,29 @@ function Console({ session, logout }) {
   const [plans,setPlans] = useState([]);
   const [edit,setEdit] = useState(null);
   const [details,setDetails] = useState(null);
+  const [invitation,setInvitation] = useState(null);
   const [status,setStatus] = useState('');
   const [error,setError] = useState('');
   const [search,setSearch] = useState('');
   const [page,setPage] = useState(0);
   const [revision,refresh] = useState(0);
-  const call = (path, options) => request(path.startsWith('/') ? path : base + path, {token:session.token,...options})
-    .catch(err => { if (err.status === 401) logout(); throw err; });
+  const [packageState,setPackageState] = useState('active');
+  const call = useCallback((path, options) => request(path.startsWith('/') ? path : base + path, {token:session.token,...options})
+    .catch(err => { if (err.status === 401) logout(); throw err; }), [session.token, logout]);
 
   useEffect(() => {
+    if (['package-offers','package-purchases','agents'].includes(section)) { setData({});setError('');return; }
     const controller = new AbortController();
     const options = {signal:controller.signal};
     const query = new URLSearchParams({search,page});
     setData(null);
     setError('');
-    Promise.all([call(['resellers','devices'].includes(section) ? section + '?' + query : section, options),
+    Promise.all([call(['resellers','devices'].includes(section) ? section + '?' + query : section === 'coupon-packages' ? section + '?state=' + packageState : section, options),
       section === 'resellers' ? call('plans',options) : Promise.resolve({plans:[]})])
       .then(([result, catalog]) => { if (!controller.signal.aborted) { setData(result); setPlans(catalog.plans); } })
       .catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
     return () => controller.abort();
-  }, [section, page, search, revision]);
+  }, [section, page, search, revision, packageState]);
 
   async function inspect(row) {
     setDetails({row,loading:true});
@@ -248,6 +259,9 @@ function Console({ session, logout }) {
       {status && <p role="status" className="notice success">{status}</p>}
       {error && <p role="alert" className="notice error">{error}</p>}
       {!data && !error && <p role="status">Loading…</p>}
+      {section === 'agents' && <AgentManager api={call} revision={revision}/>}
+      {section === 'package-offers' && <OfferManager api={call} revision={revision}/>}
+      {section === 'package-purchases' && <PurchaseHistory api={call} admin revision={revision}/>}
       {data && section === 'overview' && <Overview data={data}/>}
       {data && section === 'devices' && <section className="panel section">
         <form className="toolbar" onSubmit={event => {event.preventDefault();setPage(0);setSearch(new FormData(event.currentTarget).get('search'));}}>
@@ -267,15 +281,16 @@ function Console({ session, logout }) {
           <button className="secondary">Search</button>
         </form>
         {!plans.some(plan => plan.enabled) && <p className="table-message">Create an enabled reseller plan to add a reseller.</p>}
-        <Table headers={['Reseller','Plan','Status','Expires','Devices','Users','Playlists added','Manage']} rows={data.rows.map(row => <tr key={row.id}>
-          <td><strong>{row.username}</strong><small>{row.email}</small></td><td>{planNames.get(row.plan_id) || '—'}</td>
+        <Table headers={['Reseller','Agent','Plan','Status','Expires','Devices','Users','Playlists added','Manage']} rows={data.rows.map(row => <tr key={row.id}>
+          <td><strong>{row.username}</strong><small>{row.email}</small></td><td>{row.agent_name || 'Direct'}</td><td>{planNames.get(row.plan_id) || '—'}</td>
           <td><span className={'state state-' + row.state}>{row.state}</span></td><td>{date(row.expires_at)}</td>
           <td>{n(row.devices)}</td><td>{n(row.users)}</td><td>{n(row.playlists)}</td><td><div className="row-actions">
             <button className="text-button" onClick={() => inspect(row)}>Details</button>
+            {Number(row.onboarding_pending)===1 && <button className="text-button" onClick={()=>setInvitation(row)}>Private invitation</button>}
             <button className="text-button" onClick={() => setEdit({kind:'profile',row})}>Edit</button>
             <button className="text-button" disabled={!plans.some(plan => plan.enabled)}
               onClick={() => setEdit({kind:'membership',row,action:'assign'})}>Assign plan</button>
-            <button className="text-button" onClick={() => setEdit({kind:'credit',row})}>Credits</button>
+            <button className="text-button" onClick={() => setEdit({kind:'credit',row})}>Wallet</button>
             {(row.state === 'active' || row.state === 'legacy') && <button className="text-button"
               onClick={() => setEdit({kind:'membership',row,action:'pause'})}>Pause</button>}
             {['paused','archived'].includes(row.state) && <button className="text-button"
@@ -286,10 +301,13 @@ function Console({ session, logout }) {
         <div className="pagination"><span>{n(data.count)} resellers</span><button className="secondary" disabled={!page} onClick={() => setPage(page-1)}>Previous</button>
           <button className="secondary" disabled={(page+1)*50 >= data.count} onClick={() => setPage(page+1)}>Next</button></div>
       </section>}
-      {data && entity && <section className="panel section"><Table headers={[...entity.fields.map(field => field[1]),'Manage']}
+      {data && entity && <section className="panel section">{section === 'coupon-packages' && <p className="table-message">Base prices are in EUR. An annual activation credit grants one device 12 months. Enable “Require an eligible offer” for trial packages that must stop selling outside an offer. Existing codes keep their purchased duration.</p>}{section === 'coupon-packages' && <div className="toolbar"><label>Package records<select value={packageState} onChange={event=>setPackageState(event.target.value)}><option value="active">Current packages (enabled and disabled)</option><option value="archived">Archived packages</option><option value="all">All packages</option></select></label></div>}<Table headers={[...entity.fields.map(field => field[1]),...(section === 'coupon-packages' ? ['Archive status'] : []),'Manage']}
         rows={data[entity.list].map(row => <tr key={row.id}>{entity.fields.map(([key,,type]) =>
           <td key={key}>{type === 'checkbox' ? (row[key] ? 'Enabled' : 'Disabled') : row[key]}</td>)}
-          <td><button className="text-button" onClick={() => setEdit({kind:section,row})}>Edit</button></td></tr>)}/></section>}
+          {section === 'coupon-packages' && <td><span className={'state state-' + (row.archived_at ? 'archived' : 'active')}>{row.archived_at ? 'Archived' : 'Current'}</span></td>}
+          <td><div className="row-actions"><button className="text-button" disabled={Boolean(row.archived_at)} onClick={() => setEdit({kind:section,row})}>Edit</button>
+            {section === 'coupon-packages' && <PackageLifecycleActions row={row} api={call} onChange={result=>{setStatus(result.message);refresh(value=>value+1);}}/>}
+          </div></td></tr>)}/></section>}
       {data && section === 'payment-methods' && <section className="panel section">
         {!data.paypalConfigured && <p className="table-message">PayPal credentials are required on the API server before accepting checkout.</p>}
         <Table headers={['Payment method','Status','Internal instructions','Manage']} rows={data.methods.map(row => <tr key={row.method}>
@@ -297,21 +315,22 @@ function Console({ session, logout }) {
           <td><button className="text-button" onClick={() => setEdit({kind:'method',row})}>Edit</button></td></tr>)}/>
       </section>}
     </div></main>
+    {invitation && <AdminInvitation row={invitation} api={call} close={()=>setInvitation(null)}/>}
     {edit && <Editor seed={edit} plans={plans} save={call} close={saved => {
-      setEdit(null); if (saved) {setStatus('Changes saved.');refresh(value => value + 1);}
+      setEdit(null); if (saved) {if(edit.kind==='coupon-packages'&&!edit.row)setPackageState('active');setStatus('Changes saved.');refresh(value => value + 1);}
     }}/>}
     {details && <Modal title={details.row.username} close={() => setDetails(null)} wide>
       {details.loading && <p className="table-message" role="status">Loading…</p>}
       {details.error && <p className="notice error" role="alert">{details.error}</p>}
       {details.result && <div className="dialog-form">
-        <p>Balance <strong>{details.result.balance}</strong> · {n(details.row.devices)} devices · {n(details.row.users)} linked users · {n(details.row.playlists)} playlists added</p>
+        <p>Wallet balance <strong>{money(details.result.balance)}</strong> · {n(details.row.devices)} devices · {n(details.row.users)} linked users · {n(details.row.playlists)} playlists added</p>
         <h2>Recent activations</h2><Table headers={['Device ID','Coupon ID','Months','Date']} rows={details.result.activations.map(item =>
           <tr key={item.id}><td>{item.id_device}</td><td>{item.id_coupon}</td><td>{item.duration}</td><td>{date(item.created_at)}</td></tr>)}/>
         <h2>Balance payments</h2><Table headers={['Date','Reference','Method','Amount']} rows={details.result.payments.map(item =>
           <tr key={item.id}><td>{date(item.created_at)}</td><td>{item.paymentID}</td><td>{item.methode}</td><td>{item.payment_amount}</td></tr>)}/>
         <h2>Package payments</h2><Table headers={['Date','Reference','Package','Amount']} rows={details.result.packagePayments.map(item =>
           <tr key={item.id}><td>{date(item.createdtime)}</td><td>{item.paymentID}</td><td>{item.packages}</td><td>{item.payment_amount}</td></tr>)}/>
-        <h2>Credit history</h2><Table headers={['Date','Description','Balance']} rows={details.result.ledger.map(item =>
+        <h2>Wallet history (EUR)</h2><Table headers={['Date','Description','Balance']} rows={details.result.ledger.map(item =>
           <tr key={item.id}><td>{date(item.created_at)}</td><td>{item.message}</td><td>{item.newcredits}</td></tr>)}/>
       </div>}
     </Modal>}
